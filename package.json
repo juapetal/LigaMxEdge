@@ -1,0 +1,23 @@
+{
+  "name": "ligamx-valor",
+  "private": true,
+  "version": "3.0.0",
+  "type": "module",
+  "description": "Liga MX · Detector de Valor — app de apuestas de valor con cuentas para uso familiar",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "netlify-dev": "netlify dev"
+  },
+  "dependencies": {
+    "@netlify/blobs": "^8.1.0",
+    "netlify-identity-widget": "^1.9.2",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "^4.3.4",
+    "vite": "^5.4.11"
+  }
+}

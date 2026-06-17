@@ -1,0 +1,13 @@
+# Configuración de despliegue en Netlify
+[build]
+  command = "npm run build"
+  publish = "dist"
+  functions = "netlify/functions"
+
+# Las rutas /.netlify/functions/* las maneja Netlify directamente (no las toca
+# el redirect SPA de abajo). El catch-all sirve el index.html para que el
+# enrutado del lado cliente funcione.
+[[redirects]]
+  from = "/*"
+  to = "/index.html"
+  status = 200
