@@ -2,13 +2,19 @@ import { useState, useEffect, useMemo } from "react";
 import { DATA, CAP } from "./data.js";
 import { predictHybrid, shin } from "./model.js";
 import { initAuth, login, logout } from "./auth.js";
-import { loadBets, saveBets } from "./api.js";
+import { loadBets, saveBets, loadOdds } from "./api.js";
+import { americanToDecimal, decimalToAmerican, parseAmerican, fmtAmerican, fairAmerican } from "./oddsFormat.js";
 
 const pct = (x) => (x * 100).toFixed(1) + "%";
-const fairOdds = (p) => (p > 0 ? (1 / p).toFixed(2) : "—");
-const f2 = (x) => (isFinite(x) ? x.toFixed(2) : "—");
 const money = (x) => "$" + (Math.round(x * 100) / 100).toLocaleString("es-MX", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const initials = (s) => (s || "?").split("@")[0].slice(0, 2).toUpperCase();
+// cuota americana mostrada a partir de un registro (compatibilidad con decimales viejos)
+const betAmerican = (b) => fmtAmerican(b.oddsAmerican != null ? b.oddsAmerican : decimalToAmerican(b.odds));
+const teamName = (key) => { const t = DATA.teams.find((x) => x.key === key); return t ? t.name : key; };
+const fmtDate = (iso) => {
+  try { return new Date(iso).toLocaleString("es-MX", { weekday: "short", day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" }); }
+  catch (e) { return iso; }
+};
 
 function AltGauge({ home, away, loc }) {
   const max = 2700, hh = Math.max(7, (home.alt / max) * 72), ha = Math.max(7, (away.alt / max) * 72);
@@ -40,13 +46,19 @@ export default function App() {
   const [thr, setThr] = useState(0.02);
   const [odds, setOdds] = useState({ H: "", D: "", A: "", over25: "", under25: "", btts: "" });
 
-  // auth + registro
   const [user, setUser] = useState(null);
   const [authReady, setAuthReady] = useState(false);
   const [bets, setBets] = useState([]);
   const [betsLoading, setBetsLoading] = useState(false);
   const [syncing, setSyncing] = useState(false);
   const [syncErr, setSyncErr] = useState(false);
+
+  // cuotas en vivo
+  const [oddsMatches, setOddsMatches] = useState(null);
+  const [oddsLoading, setOddsLoading] = useState(false);
+  const [oddsErr, setOddsErr] = useState("");
+  const [oddsRemaining, setOddsRemaining] = useState(null);
+  const [oddsCached, setOddsCached] = useState(false);
 
   useEffect(() => {
     const u = initAuth((usr) => setUser(usr));
@@ -67,12 +79,36 @@ export default function App() {
     try { await saveBets(next); } catch (e) { setSyncErr(true); } finally { setSyncing(false); }
   };
 
+  const fetchOdds = async () => {
+    setOddsLoading(true); setOddsErr("");
+    try {
+      const data = await loadOdds();
+      setOddsMatches(data.matches || []);
+      setOddsRemaining(data.remaining ?? null);
+      setOddsCached(!!data.cached);
+    } catch (e) {
+      setOddsErr(String(e.message || e));
+      setOddsMatches(null);
+    } finally { setOddsLoading(false); }
+  };
+
+  const useMatch = (m) => {
+    if (!m.homeKey || !m.awayKey) return;
+    setHomeKey(m.homeKey); setAwayKey(m.awayKey);
+    setAdjH(0); setAdjA(0);
+    setOdds({
+      H: fmtAmerican(m.best.home.price), D: fmtAmerican(m.best.draw.price), A: fmtAmerican(m.best.away.price),
+      over25: "", under25: "", btts: "",
+    });
+    if (typeof window !== "undefined") window.scrollTo({ top: 0, behavior: "smooth" });
+  };
+
   const home = useMemo(() => DATA.teams.find((t) => t.key === homeKey), [homeKey]);
   const away = useMemo(() => DATA.teams.find((t) => t.key === awayKey), [awayKey]);
   const same = homeKey === awayKey;
   const pred = useMemo(() => (same ? null : predictHybrid(home, away, adjH, adjA)), [home, away, adjH, adjA, same]);
   const shin1x2 = useMemo(() => {
-    const o = [odds.H, odds.D, odds.A].map((x) => parseFloat(x));
+    const o = [odds.H, odds.D, odds.A].map((x) => americanToDecimal(parseAmerican(x)));
     return o.every((x) => x > 1) ? shin(o) : null;
   }, [odds]);
 
@@ -85,7 +121,8 @@ export default function App() {
     { key: "btts", label: "Ambos anotan", short: "BTTS" },
   ];
   const rows = MARKETS.map((m) => {
-    const o = parseFloat(odds[m.key]);
+    const aNum = parseAmerican(odds[m.key]);     // cuota americana capturada
+    const o = americanToDecimal(aNum);           // su equivalente decimal (interno)
     const pModel = pred ? pred.p[m.key] : 0;
     const valid = o > 1 && pred;
     const value = valid ? pModel * o - 1 : null;
@@ -96,7 +133,7 @@ export default function App() {
     const implausible = valid && value > 0.25;
     let marketFair = null;
     if (["H", "D", "A"].includes(m.key) && shin1x2) marketFair = shin1x2.p[{ H: 0, D: 1, A: 2 }[m.key]];
-    return { ...m, o, pModel, value, fstar, stakePct, isValue, implausible, marketFair };
+    return { ...m, aNum, o, pModel, value, fstar, stakePct, isValue, implausible, marketFair };
   });
   const recos = rows.filter((r) => r.isValue);
   const anyImplausible = rows.some((r) => r.implausible);
@@ -106,13 +143,17 @@ export default function App() {
     persist([{
       id: Date.now() + "_" + r.key, ts: new Date().toISOString().slice(0, 10),
       match: home.name + " v " + away.name, sel: r.label, short: r.short,
-      odds: r.o, pModel: r.pModel, value: r.value, stakePct: r.stakePct, stake: r.stakePct * bankroll, bankroll,
-      closing: null, clv: null,
+      odds: r.o, oddsAmerican: r.aNum, pModel: r.pModel, value: r.value,
+      stakePct: r.stakePct, stake: r.stakePct * bankroll, bankroll,
+      closing: null, closingAmerican: null, clv: null,
     }, ...bets]);
   };
   const setClosing = (id, val) => {
-    const c = parseFloat(val);
-    persist(bets.map((b) => b.id === id ? { ...b, closing: isFinite(c) && c > 1 ? c : null, clv: isFinite(c) && c > 1 ? (b.odds / c - 1) * 100 : null } : b));
+    const cA = parseAmerican(val);
+    const cDec = americanToDecimal(cA);
+    persist(bets.map((b) => b.id === id
+      ? { ...b, closing: cDec > 1 ? cDec : null, closingAmerican: isFinite(cA) ? cA : null, clv: cDec > 1 ? (b.odds / cDec - 1) * 100 : null }
+      : b));
   };
   const delBet = (id) => persist(bets.filter((b) => b.id !== id));
 
@@ -147,11 +188,46 @@ export default function App() {
             <span className="chip">Brier 1X2 <b>0.6118</b></span>
             <span className="chip">encogimiento <b>0.90</b></span>
             <span className="chip">localía <b>altitud</b></span>
-            <span className="chip">xG <b>pendiente</b> · sobre goles</span>
+            <span className="chip">cuotas <b>americana (Caliente)</b></span>
           </div>
         </header>
 
         <section className="panel" style={{ marginTop: 20 }}>
+          <p className="ptitle">Cuotas en vivo · Liga MX{oddsRemaining != null ? <span className="syncing">· {oddsRemaining} consultas restantes este mes</span> : null}</p>
+          {!user ? (
+            <div className="gate"><p>Inicia sesión para cargar cuotas reales de Liga MX y detectar valor automáticamente.</p><button className="loginbtn" onClick={login}>Iniciar sesión</button></div>
+          ) : (
+            <>
+              <button className="loadbtn" onClick={fetchOdds} disabled={oddsLoading}>{oddsLoading ? "Cargando cuotas…" : "Cargar partidos de Liga MX"}</button>
+              {oddsErr && <div className="warn"><span>⚠</span><span>{oddsErr}</span></div>}
+              {oddsMatches != null && oddsMatches.length === 0 && !oddsErr && (
+                <div className="nodata">No hay partidos de Liga MX con cuotas ahora mismo. El Apertura 2026 arranca tras el Mundial; vuelve cuando haya jornada programada.</div>
+              )}
+              {oddsMatches != null && oddsMatches.length > 0 && (
+                <>
+                  <div className="oddslist">
+                    {oddsMatches.map((m) => {
+                      const ok = m.homeKey && m.awayKey;
+                      return (
+                        <div className="oddsmatch" key={m.id}>
+                          <div>
+                            <div className="om-name">{m.homeKey ? teamName(m.homeKey) : m.homeRaw} <span className="om-vs">vs</span> {m.awayKey ? teamName(m.awayKey) : m.awayRaw}</div>
+                            <div className="om-meta">{fmtDate(m.commence_time)} · mejor de {m.books} casas{!ok ? " · equipo no reconocido" : ""}</div>
+                          </div>
+                          <div className="om-odds mono">{fmtAmerican(m.best.home.price)} / {fmtAmerican(m.best.draw.price)} / {fmtAmerican(m.best.away.price)}</div>
+                          <button className="reg" disabled={!ok} onClick={() => useMatch(m)}>{ok ? "Usar" : "—"}</button>
+                        </div>
+                      );
+                    })}
+                  </div>
+                  <div className="footnote">Se carga la <b>mejor</b> cuota disponible por resultado (en americana){oddsCached ? " · desde cache (~10 min)" : ""}. Ajústala a tu línea de Caliente antes de registrar si difiere.</div>
+                </>
+              )}
+            </>
+          )}
+        </section>
+
+        <section className="panel" style={{ marginTop: 18 }}>
           <p className="ptitle">Partido</p>
           <div className="match">
             <div className="side">
@@ -208,20 +284,20 @@ export default function App() {
               <div className="seg segA" style={{ flexGrow: pred.p.A }}><span className="sp">{pct(pred.p.A)}</span><span className="sl">{away.name}</span></div>
             </div>
             <div className="oddsrow">
-              <div className="ocell"><div className="k">Cuota justa 1</div><div className="v">{fairOdds(pred.p.H)}</div></div>
-              <div className="ocell"><div className="k">Cuota justa X</div><div className="v">{fairOdds(pred.p.D)}</div></div>
-              <div className="ocell"><div className="k">Cuota justa 2</div><div className="v">{fairOdds(pred.p.A)}</div></div>
+              <div className="ocell"><div className="k">Cuota justa 1</div><div className="v">{fairAmerican(pred.p.H)}</div></div>
+              <div className="ocell"><div className="k">Cuota justa X</div><div className="v">{fairAmerican(pred.p.D)}</div></div>
+              <div className="ocell"><div className="k">Cuota justa 2</div><div className="v">{fairAmerican(pred.p.A)}</div></div>
             </div>
             <div className="twocol">
               <div className="mini">
                 <div className="mt">Goles · línea 2.5</div>
-                <div className="mr"><span>Más de 2.5</span><span className="mono">{pct(pred.p.over25)} · {fairOdds(pred.p.over25)}</span></div>
-                <div className="mr"><span>Menos de 2.5</span><span className="mono">{pct(pred.p.under25)} · {fairOdds(pred.p.under25)}</span></div>
+                <div className="mr"><span>Más de 2.5</span><span className="mono">{pct(pred.p.over25)} · {fairAmerican(pred.p.over25)}</span></div>
+                <div className="mr"><span>Menos de 2.5</span><span className="mono">{pct(pred.p.under25)} · {fairAmerican(pred.p.under25)}</span></div>
               </div>
               <div className="mini">
                 <div className="mt">Ambos anotan</div>
-                <div className="mr"><span>Sí (BTTS)</span><span className="mono">{pct(pred.p.btts)} · {fairOdds(pred.p.btts)}</span></div>
-                <div className="mr"><span>No</span><span className="mono">{pct(1 - pred.p.btts)} · {fairOdds(1 - pred.p.btts)}</span></div>
+                <div className="mr"><span>Sí (BTTS)</span><span className="mono">{pct(pred.p.btts)} · {fairAmerican(pred.p.btts)}</span></div>
+                <div className="mr"><span>No</span><span className="mono">{pct(1 - pred.p.btts)} · {fairAmerican(1 - pred.p.btts)}</span></div>
               </div>
             </div>
           </section>
@@ -237,15 +313,15 @@ export default function App() {
                   <div className="sel">{r.label}</div>
                   <div className="modp">modelo {pct(r.pModel)}{r.marketFair != null ? " · mercado " + pct(r.marketFair) : ""}</div>
                 </div>
-                <input className="oin" inputMode="decimal" placeholder="—" value={odds[r.key]} onChange={(e) => setOdds({ ...odds, [r.key]: e.target.value })} />
-                <div className="mfair">{r.marketFair != null ? fairOdds(r.marketFair) : (["H", "D", "A"].includes(r.key) ? "···" : "—")}</div>
+                <input className="oin" inputMode="text" placeholder="+150 / -200" value={odds[r.key]} onChange={(e) => setOdds({ ...odds, [r.key]: e.target.value })} />
+                <div className="mfair">{r.marketFair != null ? fairAmerican(r.marketFair) : (["H", "D", "A"].includes(r.key) ? "···" : "—")}</div>
                 <div className="valbox">
                   {r.value == null ? <span className="vneg">—</span> : <span className={r.isValue ? "vpos" : "vneg"}>{r.value >= 0 ? "+" : ""}{(r.value * 100).toFixed(1)}%</span>}
                   {r.isValue && !r.implausible && <button className="reg" onClick={() => addBet(r)}>Registrar</button>}
                 </div>
               </div>
             ))}
-            <div className="footnote">* "Mercado" = probabilidad real estimada con de-margen de Shin sobre las 3 cuotas 1X2.</div>
+            <div className="footnote">Cuotas en formato americano (Caliente): +150 paga 150 por 100, −200 arriesga 200 por 100. * "Mercado" = probabilidad real con de-margen de Shin sobre las 3 cuotas 1X2.</div>
             {anyImplausible && <div className="warn"><span>⚠</span><span><b>Valor inverosímil (&gt;25%).</b> Casi siempre es una cuota mal capturada o un límite del modelo, no ventaja real. El backtest mostró sobreconfianza justo en favoritos fuertes. No se sugiere apuesta hasta verificar.</span></div>}
           </section>
         )}
@@ -267,7 +343,7 @@ export default function App() {
                   <div className={"reco" + (capped ? " capped" : "")} key={r.key}>
                     <div>
                       <div className="rsel">{r.label}</div>
-                      <div className="rmeta">cuota {f2(r.o)} · valor +{(r.value * 100).toFixed(1)}% · Kelly* {(r.fstar * 100).toFixed(1)}%{capped ? " · topado a 1.5%" : ""}</div>
+                      <div className="rmeta">cuota {fmtAmerican(r.aNum)} · valor +{(r.value * 100).toFixed(1)}% · Kelly* {(r.fstar * 100).toFixed(1)}%{capped ? " · topado a 1.5%" : ""}</div>
                     </div>
                     <div><div className="rstake">{money(r.stakePct * bankroll)}</div><div className="rstakelbl">{(r.stakePct * 100).toFixed(2)}% bankroll</div></div>
                     <button className="reg" onClick={() => addBet(r)}>Registrar</button>
@@ -296,22 +372,22 @@ export default function App() {
                 <div className="scard"><div className={"sv " + (beatClose == null ? "" : beatClose >= 0.5 ? "pos" : "neg")}>{beatClose == null ? "—" : (beatClose * 100).toFixed(0) + "%"}</div><div className="sk">venció al cierre</div></div>
               </div>
               {bets.length === 0 ? (
-                <div className="nodata">Aún no hay apuestas. Cuando una selección muestre valor, pulsa "Registrar" para anotarla y luego captura la cuota de cierre para medir tu CLV.</div>
+                <div className="nodata">Aún no hay apuestas. Cuando una selección muestre valor, pulsa "Registrar" para anotarla y luego captura la cuota de cierre (americana) para medir tu CLV.</div>
               ) : (
                 <>
                   <div className="bethead"><span>Apuesta</span><span>Cuota</span><span>Cierre</span><span>CLV</span></div>
                   {bets.map((b) => (
                     <div className="bet" key={b.id}>
                       <div><div className="bm">{b.short} · {b.sel}</div><div className="bmeta">{b.ts} · {b.match} · {money(b.stake)} ({(b.stakePct * 100).toFixed(2)}%)</div></div>
-                      <div className="mono">{f2(b.odds)}</div>
-                      <input className="clvin" inputMode="decimal" placeholder="cierre" defaultValue={b.closing ?? ""} onBlur={(e) => setClosing(b.id, e.target.value)} />
+                      <div className="mono">{betAmerican(b)}</div>
+                      <input className="clvin" inputMode="text" placeholder="+150" defaultValue={b.closingAmerican != null ? fmtAmerican(b.closingAmerican) : (b.closing != null ? fmtAmerican(decimalToAmerican(b.closing)) : "")} onBlur={(e) => setClosing(b.id, e.target.value)} />
                       <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 5 }}>
                         <span className={"clvtag " + (b.clv == null ? "" : b.clv >= 0 ? "pos" : "neg")}>{b.clv == null ? "—" : (b.clv >= 0 ? "+" : "") + b.clv.toFixed(1) + "%"}</span>
                         <button className="del" onClick={() => delBet(b.id)} title="Eliminar">×</button>
                       </div>
                     </div>
                   ))}
-                  <div className="footnote">Total apostado: {money(totalStake)} · CLV = cuota tomada ÷ cuota de cierre − 1 (positivo = venciste al cierre).</div>
+                  <div className="footnote">Total apostado: {money(totalStake)} · CLV = cuota tomada ÷ cuota de cierre − 1 (en decimal equivalente; positivo = venciste al cierre).</div>
                 </>
               )}
               {syncErr && <div className="warn"><span>⚠</span><span>No se pudo guardar el último cambio en el servidor. Revisa tu conexión; tus cambios siguen en pantalla pero podrían no persistir.</span></div>}
@@ -320,7 +396,7 @@ export default function App() {
         </section>
 
         <p className="note">
-          <b>Cómo leerlo.</b> El modelo da su probabilidad; tú capturas la cuota disponible; el valor es cuánto te paga de más respecto a lo que el modelo cree (valor = prob × cuota − 1). Solo se sugiere apostar por encima del umbral, con Kelly fraccional y tope duro de 1.5% del bankroll. El de-margen de Shin te dice qué piensa de verdad el mercado, para distinguir si tu ventaja viene del margen del libro o de un desacuerdo real con la línea.<br /><br />
+          <b>Cómo leerlo.</b> El modelo da su probabilidad; tú capturas la cuota de Caliente (americana); el valor es cuánto te paga de más respecto a lo que el modelo cree (valor = prob × cuota − 1, calculado en decimal por dentro). Solo se sugiere apostar por encima del umbral, con Kelly fraccional y tope duro de 1.5% del bankroll. El de-margen de Shin te dice qué piensa de verdad el mercado, para distinguir si tu ventaja viene del margen del libro o de un desacuerdo real con la línea.<br /><br />
           <b>Disciplina.</b> El 1X2 está validado por backtest; el mercado de goles es informativo hasta incorporar xG. La métrica que importa no es ganar la apuesta de hoy sino el CLV sostenido. Apuesta en papel hasta acumular CLV positivo. Esto no es consejo financiero.
         </p>
       </div>
