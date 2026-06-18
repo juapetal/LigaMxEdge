@@ -164,6 +164,17 @@ body{margin:0;background:var(--pitch)}
 .lmx .note{font-size:14px;color:var(--chalk-2);margin-top:26px;line-height:1.7;border-top:1px solid var(--line);padding-top:18px}
 .lmx .note b{color:var(--chalk)}
 
+/* cuotas en vivo */
+.lmx .loadbtn{background:var(--flood-soft);border:1px solid var(--flood-dim);color:var(--flood);border-radius:10px;padding:12px 20px;font-size:15px;font-weight:600;cursor:pointer;font-family:'Space Grotesk',sans-serif}
+.lmx .loadbtn:hover:not(:disabled){background:rgba(242,198,86,.2)}
+.lmx .loadbtn:disabled{opacity:.6;cursor:default}
+.lmx .oddslist{display:flex;flex-direction:column;gap:8px;margin-top:14px}
+.lmx .oddsmatch{display:grid;grid-template-columns:1fr auto auto;gap:14px;align-items:center;background:var(--pitch);border:1px solid var(--line);border-radius:10px;padding:12px 15px}
+.lmx .om-name{font-family:'Space Grotesk',sans-serif;font-weight:500;font-size:15.5px;color:var(--chalk)}
+.lmx .om-vs{color:var(--chalk-3);font-weight:400;font-size:13px}
+.lmx .om-meta{font-size:12px;color:var(--chalk-3);font-family:'IBM Plex Mono',monospace;margin-top:3px}
+.lmx .om-odds{font-size:14.5px;color:var(--chalk-2);white-space:nowrap}
+
 @media (max-width:780px){
   .lmx .match{grid-template-columns:1fr;gap:12px}
   .lmx .gauge{order:3;flex-direction:row;justify-content:center;gap:22px;padding:14px}
@@ -175,5 +186,7 @@ body{margin:0;background:var(--pitch)}
   .lmx .bet>*:nth-child(4),.lmx .bethead>span:nth-child(4){grid-column:1/-1}
   .lmx h1{font-size:27px}
   .lmx .acctname{max-width:90px}
+  .lmx .oddsmatch{grid-template-columns:1fr auto}
+  .lmx .om-odds{grid-column:1/-1;text-align:left}
 }
 @media (prefers-reduced-motion:reduce){.lmx .seg{transition:none}}
