@@ -25,3 +25,13 @@ export async function saveBets(bets) {
   if (!res.ok) throw new Error("No se pudo guardar (" + res.status + ")");
   return true;
 }
+
+// Cuotas en vivo de Liga MX (vía la función serverless, que llama a The Odds API).
+export async function loadOdds() {
+  const token = await getToken();
+  if (!token) throw new Error("Sesión no iniciada");
+  const res = await fetch("/.netlify/functions/odds", { headers: { Authorization: "Bearer " + token } });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || "Error " + res.status);
+  return data;
+}
