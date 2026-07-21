@@ -1,54 +1,59 @@
-// Registro de apuestas por usuario — SIN Netlify Blobs.
-// Guarda los datos en el perfil del propio usuario (user_metadata) usando la API
-// de administración de Netlify Identity. Netlify inyecta automáticamente la URL y
-// un token de admin en context.clientContext.identity cuando Identity está activo,
-// así que no hace falta ninguna variable de entorno ni configuración extra.
-export const handler = async (event, context) => {
-  const cc = context.clientContext || {};
-  const user = cc.user;
-  const identity = cc.identity;
-  if (!user) return json(401, { error: "No autorizado. Inicia sesión." });
+// Registro de apuestas por usuario. Formato CLASICO (CommonJS).
+// Guarda en el perfil del usuario (user_metadata) via Netlify Identity.
+function json(statusCode, obj) {
+  return { statusCode: statusCode, headers: { "Content-Type": "application/json" }, body: JSON.stringify(obj) };
+}
+
+exports.handler = async function (event, context) {
+  var cc = context.clientContext || {};
+  var user = cc.user;
+  var identity = cc.identity;
+  if (!user) return json(401, { error: "No autorizado. Inicia sesion." });
   if (!identity || !identity.url || !identity.token) {
-    return json(500, { error: "Identity no disponible en la función. ¿Está habilitado Netlify Identity?" });
+    return json(500, { error: "Identity no disponible. Esta habilitado Netlify Identity?" });
   }
 
-  const userUrl = identity.url + "/admin/users/" + user.sub;
-  const headers = { Authorization: "Bearer " + identity.token, "Content-Type": "application/json" };
+  var userUrl = identity.url + "/admin/users/" + user.sub;
+  var headers = { Authorization: "Bearer " + identity.token, "Content-Type": "application/json" };
 
   try {
     if (event.httpMethod === "GET") {
-      const r = await fetch(userUrl, { headers });
-      if (!r.ok) return json(502, { error: "No se pudo leer el perfil.", detail: (await r.text()).slice(0, 200) });
-      const u = await r.json();
-      const bets = u && u.user_metadata && Array.isArray(u.user_metadata.bets) ? u.user_metadata.bets : [];
-      return json(200, { bets });
+      var r = await fetch(userUrl, { headers: headers });
+      if (!r.ok) {
+        var t = "";
+        try { t = await r.text(); } catch (e) { t = ""; }
+        return json(502, { error: "No se pudo leer el perfil.", detail: t.slice(0, 200) });
+      }
+      var u = await r.json();
+      var bets = u && u.user_metadata && Array.isArray(u.user_metadata.bets) ? u.user_metadata.bets : [];
+      return json(200, { bets: bets });
     }
 
     if (event.httpMethod === "PUT") {
-      const body = JSON.parse(event.body || "{}");
-      let bets = Array.isArray(body.bets) ? body.bets : [];
-      if (bets.length > 1000) bets = bets.slice(0, 1000); // tope defensivo
+      var body = JSON.parse(event.body || "{}");
+      var newBets = Array.isArray(body.bets) ? body.bets : [];
+      if (newBets.length > 1000) newBets = newBets.slice(0, 1000);
 
-      // leer metadata actual para no pisar otras claves
-      const cur = await fetch(userUrl, { headers });
-      const u = cur.ok ? await cur.json() : {};
-      const meta = u && u.user_metadata ? u.user_metadata : {};
+      var cur = await fetch(userUrl, { headers: headers });
+      var cu = cur.ok ? await cur.json() : {};
+      var meta = cu && cu.user_metadata ? cu.user_metadata : {};
+      meta.bets = newBets;
 
-      const put = await fetch(userUrl, {
+      var put = await fetch(userUrl, {
         method: "PUT",
-        headers,
-        body: JSON.stringify({ user_metadata: { ...meta, bets } }),
+        headers: headers,
+        body: JSON.stringify({ user_metadata: meta })
       });
-      if (!put.ok) return json(502, { error: "No se pudo guardar.", detail: (await put.text()).slice(0, 200) });
-      return json(200, { ok: true, count: bets.length });
+      if (!put.ok) {
+        var t2 = "";
+        try { t2 = await put.text(); } catch (e) { t2 = ""; }
+        return json(502, { error: "No se pudo guardar.", detail: t2.slice(0, 200) });
+      }
+      return json(200, { ok: true, count: newBets.length });
     }
 
-    return json(405, { error: "Método no permitido" });
+    return json(405, { error: "Metodo no permitido" });
   } catch (e) {
     return json(500, { error: "Error en el registro.", detail: String(e && e.message ? e.message : e) });
   }
 };
-
-function json(statusCode, obj) {
-  return { statusCode, headers: { "Content-Type": "application/json" }, body: JSON.stringify(obj) };
-}
