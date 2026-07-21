@@ -1,11 +1,3 @@
-// Cuotas en vivo de Liga MX desde The Odds API — SIN Netlify Blobs.
-// - Protegida por login (Netlify Identity).
-// - Cache en memoria (mejor esfuerzo, por instancia caliente).
-// - Cuotas en formato AMERICANO (la de Caliente).
-// - Fuera de temporada devuelve lista vacía (no error).
-// - Blindada: toda la función va en try/catch y cada partido se procesa de
-//   forma defensiva (un partido mal formado se salta, no tumba la carga).
-
 const SPORT = "soccer_mexico_ligamx";
 const REGIONS = "us,eu";
 const CACHE_TTL_MS = 10 * 60 * 1000;
@@ -15,17 +7,17 @@ let memo = null;
 const TEAM_ALIASES = [
   ["Atlas Guadalajara", ["atlas"]],
   ["Deportivo Guadalajara", ["guadalajara", "chivas"]],
-  ["CF América", ["america"]],
+  ["CF America", ["america"]],
   ["Cruz Azul", ["cruz azul"]],
   ["CF Monterrey", ["monterrey", "rayados"]],
   ["UANL Tigres", ["tigres"]],
   ["CF Pachuca", ["pachuca"]],
   ["Club Necaxa", ["necaxa"]],
-  ["Club León", ["leon"]],
+  ["Club Leon", ["leon"]],
   ["Pumas UNAM", ["pumas", "unam"]],
   ["Club Tijuana", ["tijuana", "xolos"]],
-  ["Atlético San Luis", ["san luis"]],
-  ["FC Juárez", ["juarez", "bravos"]],
+  ["Atletico San Luis", ["san luis"]],
+  ["FC Juarez", ["juarez", "bravos"]],
   ["Gallos Blancos", ["queretaro", "gallos"]],
   ["Atlante", ["atlante"]],
   ["Puebla FC", ["puebla"]],
@@ -42,7 +34,6 @@ function mapTeam(raw) {
   return null;
 }
 
-// Procesa la respuesta cruda de forma tolerante: cualquier partido problemático se salta.
 function normalize(events) {
   if (!Array.isArray(events)) return [];
   const out = [];
@@ -85,7 +76,6 @@ function normalize(events) {
         });
       }
     } catch (e) {
-      // partido con forma inesperada: se ignora y seguimos con los demás
     }
   }
   return out;
@@ -94,16 +84,14 @@ function normalize(events) {
 export const handler = async (event, context) => {
   try {
     const user = context.clientContext && context.clientContext.user;
-    if (!user) return json(401, { error: "No autorizado. Inicia sesión." });
+    if (!user) return json(401, { error: "No autorizado. Inicia sesion." });
 
     const apiKey = process.env.ODDS_API_KEY;
     if (!apiKey) return json(500, { error: "Falta ODDS_API_KEY en las variables de entorno de Netlify." });
 
     if (memo && Date.now() - memo.at < CACHE_TTL_MS) return json(200, { ...memo.payload, cached: true });
 
-    const url = "https://api.the-odds-api.com/v4/sports/" + SPORT + "/odds"
-      + "?apiKey=" + encodeURIComponent(apiKey)
-      + "&regions=" + REGIONS + "&markets=h2h&oddsFormat=american&dateFormat=iso";
+    const url = "https://api.the-odds-api.com/v4/sports/" + SPORT + "/odds" + "?apiKey=" + encodeURIComponent(apiKey) + "&regions=" + REGIONS + "&markets=h2h&oddsFormat=american&dateFormat=iso";
 
     let res;
     try { res = await fetch(url); }
@@ -117,12 +105,12 @@ export const handler = async (event, context) => {
       memo = { at: Date.now(), payload };
       return json(200, payload);
     }
-    if (res.status === 401) return json(502, { error: "API key inválida o sin créditos en The Odds API." });
-    if (res.status === 429) return json(502, { error: "Límite de The Odds API alcanzado por ahora." });
-    if (!res.ok) return json(502, { error: "The Odds API devolvió " + res.status + ".", detail: (await safeText(res)).slice(0, 200) });
+    if (res.status === 401) return json(502, { error: "API key invalida o sin creditos en The Odds API." });
+    if (res.status === 429) return json(502, { error: "Limite de The Odds API alcanzado por ahora." });
+    if (!res.ok) return json(502, { error: "The Odds API devolvio " + res.status + ".", detail: (await safeText(res)).slice(0, 200) });
 
     let raw;
-    try { raw = await res.json(); } catch (e) { return json(502, { error: "Respuesta no válida de The Odds API." }); }
+    try { raw = await res.json(); } catch (e) { return json(502, { error: "Respuesta no valida de The Odds API." }); }
 
     const payload = {
       matches: normalize(raw),
@@ -134,7 +122,7 @@ export const handler = async (event, context) => {
     memo = { at: Date.now(), payload };
     return json(200, payload);
   } catch (e) {
-    return json(500, { error: "Error inesperado en la función de cuotas.", detail: String(e && e.message ? e.message : e) });
+    return json(500, { error: "Error inesperado en la funcion de cuotas.", detail: String(e && e.message ? e.message : e) });
   }
 };
 
