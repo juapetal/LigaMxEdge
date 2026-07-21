@@ -1,3 +1,4 @@
+// Cuotas en vivo de Liga MX desde The Odds API. Formato CLASICO (CommonJS).
 const SPORT = "soccer_mexico_ligamx";
 const REGIONS = "us,eu";
 const CACHE_TTL_MS = 10 * 60 * 1000;
@@ -30,37 +31,45 @@ function norm(s) {
 }
 function mapTeam(raw) {
   const n = norm(raw);
-  for (const [key, aliases] of TEAM_ALIASES) if (aliases.some((a) => n.includes(a))) return key;
+  for (var i = 0; i < TEAM_ALIASES.length; i++) {
+    var key = TEAM_ALIASES[i][0];
+    var aliases = TEAM_ALIASES[i][1];
+    if (aliases.some(function (a) { return n.indexOf(a) !== -1; })) return key;
+  }
   return null;
 }
 
 function normalize(events) {
   if (!Array.isArray(events)) return [];
-  const out = [];
-  for (const ev of events) {
+  var out = [];
+  for (var e = 0; e < events.length; e++) {
     try {
+      var ev = events[e];
       if (!ev || typeof ev !== "object") continue;
-      const homeRaw = ev.home_team, awayRaw = ev.away_team;
+      var homeRaw = ev.home_team, awayRaw = ev.away_team;
       if (!homeRaw || !awayRaw) continue;
 
-      const best = { home: null, draw: null, away: null };
-      const bookmakers = Array.isArray(ev.bookmakers) ? ev.bookmakers : [];
-      for (const bk of bookmakers) {
+      var best = { home: null, draw: null, away: null };
+      var bookmakers = Array.isArray(ev.bookmakers) ? ev.bookmakers : [];
+      for (var b = 0; b < bookmakers.length; b++) {
+        var bk = bookmakers[b];
         if (!bk) continue;
-        const markets = Array.isArray(bk.markets) ? bk.markets : [];
-        const h2h = markets.find((m) => m && m.key === "h2h");
+        var markets = Array.isArray(bk.markets) ? bk.markets : [];
+        var h2h = null;
+        for (var m = 0; m < markets.length; m++) { if (markets[m] && markets[m].key === "h2h") { h2h = markets[m]; break; } }
         if (!h2h) continue;
-        const outcomes = Array.isArray(h2h.outcomes) ? h2h.outcomes : [];
-        for (const oc of outcomes) {
+        var outcomes = Array.isArray(h2h.outcomes) ? h2h.outcomes : [];
+        for (var o = 0; o < outcomes.length; o++) {
+          var oc = outcomes[o];
           if (!oc) continue;
-          let slot = null;
+          var slot = null;
           if (oc.name === homeRaw) slot = "home";
           else if (oc.name === awayRaw) slot = "away";
           else if (/draw|empate|tie/i.test(String(oc.name || ""))) slot = "draw";
           if (!slot) continue;
-          const price = Number(oc.price);
+          var price = Number(oc.price);
           if (!isFinite(price)) continue;
-          if (!best[slot] || price > best[slot].price) best[slot] = { price, book: bk.title || "" };
+          if (!best[slot] || price > best[slot].price) best[slot] = { price: price, book: bk.title || "" };
         }
       }
 
@@ -68,66 +77,70 @@ function normalize(events) {
         out.push({
           id: ev.id,
           commence_time: ev.commence_time,
-          homeRaw, awayRaw,
-          homeKey: mapTeam(homeRaw),
-          awayKey: mapTeam(awayRaw),
-          best,
-          books: bookmakers.length,
+          homeRaw: homeRaw, awayRaw: awayRaw,
+          homeKey: mapTeam(homeRaw), awayKey: mapTeam(awayRaw),
+          best: best, books: bookmakers.length
         });
       }
-    } catch (e) {
-    }
+    } catch (err) { /* salta partido problematico */ }
   }
   return out;
 }
 
-export const handler = async (event, context) => {
+function numOrNull(v) { return v != null ? Number(v) : null; }
+function json(statusCode, obj) {
+  return { statusCode: statusCode, headers: { "Content-Type": "application/json" }, body: JSON.stringify(obj) };
+}
+
+exports.handler = async function (event, context) {
   try {
-    const user = context.clientContext && context.clientContext.user;
+    var user = context.clientContext && context.clientContext.user;
     if (!user) return json(401, { error: "No autorizado. Inicia sesion." });
 
-    const apiKey = process.env.ODDS_API_KEY;
+    var apiKey = process.env.ODDS_API_KEY;
     if (!apiKey) return json(500, { error: "Falta ODDS_API_KEY en las variables de entorno de Netlify." });
 
-    if (memo && Date.now() - memo.at < CACHE_TTL_MS) return json(200, { ...memo.payload, cached: true });
+    if (memo && Date.now() - memo.at < CACHE_TTL_MS) {
+      return json(200, Object.assign({}, memo.payload, { cached: true }));
+    }
 
-    const url = "https://api.the-odds-api.com/v4/sports/" + SPORT + "/odds" + "?apiKey=" + encodeURIComponent(apiKey) + "&regions=" + REGIONS + "&markets=h2h&oddsFormat=american&dateFormat=iso";
+    var url = "https://api.the-odds-api.com/v4/sports/" + SPORT + "/odds"
+      + "?apiKey=" + encodeURIComponent(apiKey)
+      + "&regions=" + REGIONS + "&markets=h2h&oddsFormat=american&dateFormat=iso";
 
-    let res;
+    var res;
     try { res = await fetch(url); }
     catch (e) { return json(502, { error: "No se pudo contactar The Odds API.", detail: String(e && e.message || e) }); }
 
-    const remaining = res.headers.get("x-requests-remaining");
-    const used = res.headers.get("x-requests-used");
+    var remaining = res.headers.get("x-requests-remaining");
+    var used = res.headers.get("x-requests-used");
 
     if (res.status === 404 || res.status === 422) {
-      const payload = { matches: [], remaining: numOrNull(remaining), used: numOrNull(used), offseason: true, fetchedAt: new Date().toISOString(), cached: false };
-      memo = { at: Date.now(), payload };
-      return json(200, payload);
+      var empty = { matches: [], remaining: numOrNull(remaining), used: numOrNull(used), offseason: true, fetchedAt: new Date().toISOString(), cached: false };
+      memo = { at: Date.now(), payload: empty };
+      return json(200, empty);
     }
     if (res.status === 401) return json(502, { error: "API key invalida o sin creditos en The Odds API." });
     if (res.status === 429) return json(502, { error: "Limite de The Odds API alcanzado por ahora." });
-    if (!res.ok) return json(502, { error: "The Odds API devolvio " + res.status + ".", detail: (await safeText(res)).slice(0, 200) });
+    if (!res.ok) {
+      var t = "";
+      try { t = await res.text(); } catch (e2) { t = ""; }
+      return json(502, { error: "The Odds API devolvio " + res.status + ".", detail: t.slice(0, 200) });
+    }
 
-    let raw;
-    try { raw = await res.json(); } catch (e) { return json(502, { error: "Respuesta no valida de The Odds API." }); }
+    var raw;
+    try { raw = await res.json(); } catch (e3) { return json(502, { error: "Respuesta no valida de The Odds API." }); }
 
-    const payload = {
+    var payload = {
       matches: normalize(raw),
       remaining: numOrNull(remaining),
       used: numOrNull(used),
       fetchedAt: new Date().toISOString(),
-      cached: false,
+      cached: false
     };
-    memo = { at: Date.now(), payload };
+    memo = { at: Date.now(), payload: payload };
     return json(200, payload);
   } catch (e) {
     return json(500, { error: "Error inesperado en la funcion de cuotas.", detail: String(e && e.message ? e.message : e) });
   }
 };
-
-function numOrNull(v) { return v != null ? Number(v) : null; }
-async function safeText(res) { try { return await res.text(); } catch (e) { return ""; } }
-function json(statusCode, obj) {
-  return { statusCode, headers: { "Content-Type": "application/json" }, body: JSON.stringify(obj) };
-}
