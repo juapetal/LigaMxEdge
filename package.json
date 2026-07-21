@@ -3,7 +3,7 @@
   "private": true,
   "version": "3.0.0",
   "type": "module",
-  "description": "Liga MX · Detector de Valor — app de apuestas de valor con cuentas para uso familiar",
+  "description": "Liga MX - Detector de Valor",
   "scripts": {
     "dev": "vite",
     "build": "vite build",
